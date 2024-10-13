@@ -74,10 +74,10 @@ public class OrderMatcher {
 				}
 
 				if (!(buyOrders.isEmpty() || sellOrders.isEmpty())) {
-					double buyPrice = getNextBuyOrder().get().getPrice().get();
-					double sellPrice = getNextSellOrder().get().getPrice().get();
+					Order so = getNextSellOrder().get(), bo = getNextBuyOrder().get();
+					double buyPrice = bo.getPrice().get(), sellPrice = so.getPrice().get();
 
-					if (buyPrice >= sellPrice) {
+					if ((so.equals(currentOrder) || bo.equals(currentOrder)) && buyPrice >= sellPrice) {
 						Order buyOrderProcessed = buyOrders.poll(), sellOrderProcessed = sellOrders.poll();
 
 						buyOrdersProcessed.putIfAbsent(buyOrderProcessed, sellOrderProcessed);
