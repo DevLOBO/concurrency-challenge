@@ -6,8 +6,6 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
 
-import lombok.extern.slf4j.Slf4j;
-
 public class OrderMatcher {
 	private static final int TIMEOUT_DURATION = 10000;
 	private static final int SLEEPING_TIME = 50;

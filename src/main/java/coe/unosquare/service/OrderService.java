@@ -7,7 +7,6 @@ import coe.unosquare.model.ApiResponse;
 import coe.unosquare.model.Order;
 import coe.unosquare.model.OrderMatcher;
 import coe.unosquare.model.OrderTimeoutException;
-import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -25,6 +24,6 @@ public class OrderService {
 			orderMatcher.matchOrders(order);
 			return ResponseEntity.ok().body(new ApiResponse(true, "Order processed", order));
 		}).subscribeOn(Schedulers.boundedElastic()).onErrorReturn(OrderTimeoutException.class, ResponseEntity
-				.status(400).body(new ApiResponse(false, "There is no order matching to complete your order.", order)));
+				.status(500).body(new ApiResponse(false, "There is no order matching to complete your order.", order)));
 	}
 }

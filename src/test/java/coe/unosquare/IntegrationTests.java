@@ -69,15 +69,4 @@ class IntegrationTests {
 
 		CompletableFuture.allOf(sendBuyOrder, sendSellOrder);
 	}
-
-	private CompletableFuture<Void> sendOrder(Integer price, String type, long sleepingTime) {
-		return CompletableFuture.runAsync(() -> {
-			try {
-				Thread.sleep(sleepingTime);
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
-			webClient.post().uri(String.format(ORDERS_SUBMIT_URL, price, type)).exchange().expectStatus().isOk();
-		}, executor);
-	}
 }

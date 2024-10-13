@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.RestController;
 import coe.unosquare.model.ApiResponse;
 import coe.unosquare.model.Order;
 import coe.unosquare.service.OrderService;
-import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
 
 @RestController
