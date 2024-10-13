@@ -59,15 +59,6 @@ public class OrderMatcher {
 		long startTime = System.currentTimeMillis();
 		while (true) {
 			synchronized (this) {
-				long duration = System.currentTimeMillis() - startTime;
-				if (duration >= TIMEOUT_DURATION && currentOrder.getType().get() == Order.OrderType.BUY) {
-					buyOrders.remove(currentOrder);
-					throw new OrderTimeoutException();
-				} else if (duration >= TIMEOUT_DURATION && currentOrder.getType().get() == Order.OrderType.SELL) {
-					sellOrders.remove(currentOrder);
-					throw new OrderTimeoutException();
-				}
-
 				if (currentOrder.getType().get() == Order.OrderType.BUY
 						&& buyOrdersProcessed.containsKey(currentOrder)) {
 					Order sellOrder = buyOrdersProcessed.get(currentOrder);
@@ -93,6 +84,15 @@ public class OrderMatcher {
 						sellOrdersProcessed.putIfAbsent(sellOrderProcessed, buyOrderProcessed);
 						return;
 					}
+				}
+
+				long duration = System.currentTimeMillis() - startTime;
+				if (duration >= TIMEOUT_DURATION && currentOrder.getType().get() == Order.OrderType.BUY) {
+					buyOrders.remove(currentOrder);
+					throw new OrderTimeoutException();
+				} else if (duration >= TIMEOUT_DURATION && currentOrder.getType().get() == Order.OrderType.SELL) {
+					sellOrders.remove(currentOrder);
+					throw new OrderTimeoutException();
 				}
 			}
 
