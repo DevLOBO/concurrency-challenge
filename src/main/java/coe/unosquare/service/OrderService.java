@@ -16,19 +16,24 @@ public class OrderService {
 	private final OrderMatcher orderMatcher = new OrderMatcher();
 
 	public Mono<ApiResponse> viewOrders() {
-		return Mono.just(orderMatcher.getAllOrders());
+		// Obteniendo las órdenes en un Mono sin bloquear
+		return orderMatcher.getAllOrders();
 	}
 
 	public Mono<ResponseEntity<ApiResponse>> processOrder(Order order) {
-		return Mono.fromCallable(() -> {
-			orderMatcher.addOrder(order);
-			orderMatcher.matchOrders(order);
-			return ResponseEntity.ok().body(new ApiResponse(true, "Order processed", order));
-		}).subscribeOn(Schedulers.boundedElastic()).onErrorReturn(OrderTimeoutException.class, ResponseEntity
-				.status(500).body(new ApiResponse(false, "There is no order matching to complete your order.", order)));
+		// Agregar la orden de manera reactiva y luego intentar emparejarla de forma
+		// continua hasta que se procese
+		return orderMatcher.addOrder(order).then(orderMatcher.matchOrder(order)) // Procesa la orden de manera reactiva
+				.map(processedOrder -> ResponseEntity.ok().body(new ApiResponse(true, "Order processed", order)))
+				.switchIfEmpty(Mono.error(new OrderTimeoutException()))
+				.onErrorResume(OrderTimeoutException.class,
+						ex -> Mono
+								.just(ResponseEntity.status(500).body(new ApiResponse(false, ex.getMessage(), order))))
+				.subscribeOn(Schedulers.boundedElastic()); // Utilizando un scheduler para no bloquear el hilo
 	}
 
 	public Mono<OrderStats> getOrderStats() {
-		return Mono.just(orderMatcher.getStatistics());
+		// Obteniendo las estadísticas de las órdenes en un Mono sin bloquear
+		return orderMatcher.getStatistics();
 	}
 }

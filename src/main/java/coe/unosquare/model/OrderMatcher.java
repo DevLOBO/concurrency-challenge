@@ -1,122 +1,112 @@
 package coe.unosquare.model;
 
-import java.util.Arrays;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
+
+import java.time.Duration;
 import java.util.Comparator;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 public class OrderMatcher {
+
 	private static final int SLEEPING_TIME = 100;
 
 	private static final Comparator<Order> buyComparator = Comparator.comparing((Order order) -> -1 * order.price())
-			.thenComparing((Order order) -> order.timestamp());
-	private static final Comparator<Order> sellComparator = Comparator.comparing((Order order) -> order.price())
-			.thenComparing((Order order) -> order.timestamp());
+			.thenComparing(Order::timestamp);
+	private static final Comparator<Order> sellComparator = Comparator.comparing(Order::price)
+			.thenComparing(Order::timestamp);
 
-	private final PriorityBlockingQueue<Order> buyOrders = new PriorityBlockingQueue<Order>(100, buyComparator);
-	private final PriorityBlockingQueue<Order> sellOrders = new PriorityBlockingQueue<Order>(100, sellComparator);
+	private final PriorityBlockingQueue<Order> buyOrders = new PriorityBlockingQueue<>(100, buyComparator);
+	private final PriorityBlockingQueue<Order> sellOrders = new PriorityBlockingQueue<>(100, sellComparator);
 
-	private static final ConcurrentHashMap<Order, Order> buyOrdersProcessed = new ConcurrentHashMap<>();
-	private static final ConcurrentHashMap<Order, Order> sellOrdersProcessed = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<Order, Order> buyOrdersProcessed = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<Order, Order> sellOrdersProcessed = new ConcurrentHashMap<>();
 
-	private static final Lock buyLocker = new ReentrantLock(), sellLocker = new ReentrantLock();
-	private static final Condition buyCondition = buyLocker.newCondition(), sellCondition = sellLocker.newCondition();
+	private final AtomicInteger buyRequests = new AtomicInteger(0);
+	private final AtomicInteger sellRequests = new AtomicInteger(0);
+	private final AtomicInteger buyProcessed = new AtomicInteger(0);
+	private final AtomicInteger sellProcessed = new AtomicInteger(0);
+	private final AtomicInteger buyCompleted = new AtomicInteger(0);
+	private final AtomicInteger sellCompleted = new AtomicInteger(0);
 
-	private static final AtomicInteger buyRequests = new AtomicInteger(0), sellRequests = new AtomicInteger(0),
-			buyProcessed = new AtomicInteger(0), sellProcessed = new AtomicInteger(0),
-			buyCompleted = new AtomicInteger(0), sellCompleted = new AtomicInteger(0);
+	private final Sinks.Many<Order> buyOrderSink = Sinks.many().multicast().onBackpressureBuffer();
+	private final Sinks.Many<Order> sellOrderSink = Sinks.many().multicast().onBackpressureBuffer();
 
 	public OrderMatcher() {
-		new Thread(() -> {
-			while (true) {
-				buyLocker.lock();
-				sellLocker.lock();
-
-				boolean wasOrdersProcessed = false;
-				while (!buyOrders.isEmpty() && !sellOrders.isEmpty()
-						&& buyOrders.peek().price() >= sellOrders.peek().price()) {
-					Order bo = buyOrders.poll(), so = sellOrders.poll();
-					buyOrdersProcessed.putIfAbsent(bo, so);
-					sellOrdersProcessed.putIfAbsent(so, bo);
-
-					sellProcessed.incrementAndGet();
-					buyProcessed.incrementAndGet();
-					wasOrdersProcessed = true;
-				}
-
-				if (wasOrdersProcessed) {
-					buyCondition.signalAll();
-					sellCondition.signalAll();
-				}
-
-				buyLocker.unlock();
-				sellLocker.unlock();
-
-				try {
-					Thread.sleep(SLEEPING_TIME);
-				} catch (InterruptedException e) {
-					e.printStackTrace();
-				}
-			}
-		}).start();
-
+		// Procesa las órdenes periódicamente
+		Flux.merge(buyOrderSink.asFlux(), sellOrderSink.asFlux()).flatMap(tick -> processOrders())
+				.subscribeOn(Schedulers.boundedElastic()).subscribe();
 	}
 
-	public ApiResponse getAllOrders() {
-		return new ApiResponse(true, "All orders in process", new AvailableOrdersOrdersInProcess(
-				Arrays.asList(buyOrders.toArray(new Order[0])), Arrays.asList(sellOrders.toArray(new Order[0]))));
-	}
-
-	// Validate the order type and add into the corresponding queue.
-	public void addOrder(Order order) {
+	// Agregar orden de manera reactiva
+	public Mono<Void> addOrder(Order order) {
 		if (order.orderType() == OrderType.BUY) {
-			buyLocker.lock();
-			buyOrders.add(order);
-			buyLocker.unlock();
+			return Mono.fromRunnable(() -> {
+				buyOrders.add(order);
+				buyOrderSink.tryEmitNext(order); // Emitir la nueva orden de compra
+			});
 		} else {
-			sellLocker.lock();
-			sellOrders.add(order);
-			sellLocker.unlock();
+			return Mono.fromRunnable(() -> {
+				sellOrders.add(order);
+				sellOrderSink.tryEmitNext(order); // Emitir la nueva orden de venta
+			});
 		}
 	}
 
-	/*
-	 * checks for pairs of buy and sell orders with compatible prices (where the buy
-	 * order price is greater than or equal to the sell order price) and removes
-	 * them from the queues once matched, simulating a trade between those orders.
-	 */
-	public void matchOrders(Order currentOrder) throws InterruptedException {
+	// Procesar las órdenes coincidentes
+	private Mono<Void> processOrders() {
+		return Mono.fromRunnable(() -> {
+			if (!buyOrders.isEmpty() && !sellOrders.isEmpty()) {
+				Order bo = buyOrders.poll(), so = sellOrders.poll();
+
+				if (!sellOrdersProcessed.containsKey(so) && !buyOrdersProcessed.containsKey(bo)
+						&& bo.price() >= so.price()) {
+					sellOrdersProcessed.putIfAbsent(so, bo);
+					buyOrdersProcessed.putIfAbsent(bo, so);
+
+					buyProcessed.incrementAndGet();
+					sellProcessed.incrementAndGet();
+				} else {
+					addOrder(so);
+					addOrder(bo);
+				}
+			}
+		});
+	}
+
+	// Verifica si una orden ha sido procesada y devuelve el par correspondiente
+	public Mono<Order> matchOrder(Order currentOrder) {
 		if (currentOrder.orderType() == OrderType.BUY) {
 			buyRequests.incrementAndGet();
-			buyLocker.lock();
-			while (!buyOrdersProcessed.containsKey(currentOrder)) {
-				buyCondition.await();
-			}
-			buyLocker.unlock();
+			return Mono.defer(() -> Mono.justOrEmpty(buyOrdersProcessed.remove(currentOrder))).doOnSuccess(order -> {
+				if (Objects.nonNull(order)) {
+					buyCompleted.incrementAndGet();
+				}
+			}).repeatWhenEmpty(repeatSignal -> repeatSignal.delayElements(Duration.ofMillis(SLEEPING_TIME)));
 		} else {
 			sellRequests.incrementAndGet();
-			sellLocker.lock();
-			while (!sellOrdersProcessed.containsKey(currentOrder)) {
-				sellCondition.await();
-			}
-			sellLocker.unlock();
-		}
-
-		if (currentOrder.orderType() == OrderType.BUY) {
-			buyOrdersProcessed.remove(currentOrder);
-			buyCompleted.incrementAndGet();
-		} else {
-			sellOrdersProcessed.remove(currentOrder);
-			sellCompleted.incrementAndGet();
+			return Mono.defer(() -> Mono.justOrEmpty(sellOrdersProcessed.remove(currentOrder))).doOnSuccess(order -> {
+				if (Objects.nonNull(order)) {
+					sellCompleted.incrementAndGet();
+				}
+			}).repeatWhenEmpty(repeatSignal -> repeatSignal.delayElements(Duration.ofMillis(SLEEPING_TIME)));
 		}
 	}
 
-	public OrderStats getStatistics() {
-		return new OrderStats(buyRequests.get(), sellRequests.get(), buyProcessed.get(), sellProcessed.get(),
-				buyCompleted.get(), sellCompleted.get());
+	// Devuelve el estado actual de todas las órdenes
+	public Mono<ApiResponse> getAllOrders() {
+		return Mono.just(new ApiResponse(true, "All orders in process",
+				new AvailableOrdersOrdersInProcess(buyOrders.stream().toList(), sellOrders.stream().toList())));
+	}
+
+	// Devuelve las estadísticas de las órdenes procesadas
+	public Mono<OrderStats> getStatistics() {
+		return Mono.just(new OrderStats(buyRequests.get(), sellRequests.get(), buyProcessed.get(), sellProcessed.get(),
+				buyCompleted.get(), sellCompleted.get(), buyOrdersProcessed.size(), sellOrdersProcessed.size()));
 	}
 }
