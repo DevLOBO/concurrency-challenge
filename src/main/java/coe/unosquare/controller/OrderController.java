@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import coe.unosquare.model.ApiResponse;
 import coe.unosquare.model.Order;
+import coe.unosquare.model.OrderStats;
+import coe.unosquare.model.OrderType;
 import coe.unosquare.service.OrderService;
 import reactor.core.publisher.Mono;
 
@@ -25,9 +27,14 @@ public class OrderController {
 	}
 
 	@PostMapping("/submit")
-	public Mono<ResponseEntity<ApiResponse>> submitOrder(@RequestParam("ordertype") Order.OrderType orderType,
+	public Mono<ResponseEntity<ApiResponse>> submitOrder(@RequestParam("ordertype") OrderType orderType,
 			@RequestParam("price") double price, @RequestParam("quantity") int quantity) {
 		Order orderRequest = new Order(orderType, price, quantity);
 		return orderService.processOrder(orderRequest);
+	}
+
+	@GetMapping("/stats")
+	public Mono<OrderStats> getOrderStats() {
+		return orderService.getOrderStats();
 	}
 }

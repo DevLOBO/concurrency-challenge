@@ -2,20 +2,20 @@ package coe.unosquare.model;
 
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class OrderMatcher {
-	private static final int TIMEOUT_DURATION = 10000;
-	private static final int SLEEPING_TIME = 50;
+	private static final int SLEEPING_TIME = 100;
 
-	private static final Comparator<Order> buyComparator = Comparator
-			.comparing((Order order) -> -1 * order.getPrice().get())
-			.thenComparing((Order order) -> order.getTimestamp().get());
-	private static final Comparator<Order> sellComparator = Comparator
-			.comparing((Order order) -> order.getPrice().get())
-			.thenComparing((Order order) -> order.getTimestamp().get());
+	private static final Comparator<Order> buyComparator = Comparator.comparing((Order order) -> -1 * order.price())
+			.thenComparing((Order order) -> order.timestamp());
+	private static final Comparator<Order> sellComparator = Comparator.comparing((Order order) -> order.price())
+			.thenComparing((Order order) -> order.timestamp());
 
 	private final PriorityBlockingQueue<Order> buyOrders = new PriorityBlockingQueue<Order>(100, buyComparator);
 	private final PriorityBlockingQueue<Order> sellOrders = new PriorityBlockingQueue<Order>(100, sellComparator);
@@ -23,30 +23,64 @@ public class OrderMatcher {
 	private static final ConcurrentHashMap<Order, Order> buyOrdersProcessed = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<Order, Order> sellOrdersProcessed = new ConcurrentHashMap<>();
 
-	public synchronized ApiResponse getAllOrders() {
+	private static final Lock buyLocker = new ReentrantLock(), sellLocker = new ReentrantLock();
+	private static final Condition buyCondition = buyLocker.newCondition(), sellCondition = sellLocker.newCondition();
+
+	private static final AtomicInteger buyRequests = new AtomicInteger(0), sellRequests = new AtomicInteger(0),
+			buyProcessed = new AtomicInteger(0), sellProcessed = new AtomicInteger(0),
+			buyCompleted = new AtomicInteger(0), sellCompleted = new AtomicInteger(0);
+
+	public OrderMatcher() {
+		new Thread(() -> {
+			while (true) {
+				buyLocker.lock();
+				sellLocker.lock();
+
+				boolean wasOrdersProcessed = false;
+				while (!buyOrders.isEmpty() && !sellOrders.isEmpty()
+						&& buyOrders.peek().price() >= sellOrders.peek().price()) {
+					Order bo = buyOrders.poll(), so = sellOrders.poll();
+					buyOrdersProcessed.putIfAbsent(bo, so);
+					sellOrdersProcessed.putIfAbsent(so, bo);
+
+					sellProcessed.incrementAndGet();
+					buyProcessed.incrementAndGet();
+					wasOrdersProcessed = true;
+				}
+
+				if (wasOrdersProcessed) {
+					buyCondition.signalAll();
+					sellCondition.signalAll();
+				}
+
+				buyLocker.unlock();
+				sellLocker.unlock();
+
+				try {
+					Thread.sleep(SLEEPING_TIME);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			}
+		}).start();
+
+	}
+
+	public ApiResponse getAllOrders() {
 		return new ApiResponse(true, "All orders in process", new AvailableOrdersOrdersInProcess(
 				Arrays.asList(buyOrders.toArray(new Order[0])), Arrays.asList(sellOrders.toArray(new Order[0]))));
 	}
 
 	// Validate the order type and add into the corresponding queue.
-	public synchronized void addOrder(Order order) {
-		if (order.getType().get().compareTo(Order.OrderType.BUY) == 0)
+	public void addOrder(Order order) {
+		if (order.orderType() == OrderType.BUY) {
+			buyLocker.lock();
 			buyOrders.add(order);
-		else
+			buyLocker.unlock();
+		} else {
+			sellLocker.lock();
 			sellOrders.add(order);
-	}
-
-	// Use Optional to wrap the next buy order (or empty if none).
-	public Optional<Order> getNextBuyOrder() {
-		synchronized (buyOrders) {
-			return Optional.ofNullable(buyOrders.peek());
-		}
-	}
-
-	// Use Optional to wrap the next sell order (or empty if none).
-	public Optional<Order> getNextSellOrder() {
-		synchronized (sellOrders) {
-			return Optional.ofNullable(sellOrders.peek());
+			sellLocker.unlock();
 		}
 	}
 
@@ -56,47 +90,33 @@ public class OrderMatcher {
 	 * them from the queues once matched, simulating a trade between those orders.
 	 */
 	public void matchOrders(Order currentOrder) throws InterruptedException {
-		long startTime = System.currentTimeMillis();
-		while (true) {
-			synchronized (this) {
-				if (currentOrder.getType().get() == Order.OrderType.BUY
-						&& buyOrdersProcessed.containsKey(currentOrder)) {
-					Order sellOrder = buyOrdersProcessed.get(currentOrder);
-					buyOrdersProcessed.remove(currentOrder, sellOrder);
-					sellOrdersProcessed.remove(sellOrder, currentOrder);
-					return;
-				} else if (currentOrder.getType().get() == Order.OrderType.SELL
-						&& sellOrdersProcessed.containsKey(currentOrder)) {
-					Order buyOrder = sellOrdersProcessed.get(currentOrder);
-					buyOrdersProcessed.remove(buyOrder, currentOrder);
-					sellOrdersProcessed.remove(currentOrder, buyOrder);
-					return;
-				}
-
-				if (!(buyOrders.isEmpty() || sellOrders.isEmpty())) {
-					Order so = getNextSellOrder().get(), bo = getNextBuyOrder().get();
-					double buyPrice = bo.getPrice().get(), sellPrice = so.getPrice().get();
-
-					if ((so.equals(currentOrder) || bo.equals(currentOrder)) && buyPrice >= sellPrice) {
-						Order buyOrderProcessed = buyOrders.poll(), sellOrderProcessed = sellOrders.poll();
-
-						buyOrdersProcessed.putIfAbsent(buyOrderProcessed, sellOrderProcessed);
-						sellOrdersProcessed.putIfAbsent(sellOrderProcessed, buyOrderProcessed);
-						return;
-					}
-				}
-
-				long duration = System.currentTimeMillis() - startTime;
-				if (duration >= TIMEOUT_DURATION && currentOrder.getType().get() == Order.OrderType.BUY) {
-					buyOrders.remove(currentOrder);
-					throw new OrderTimeoutException();
-				} else if (duration >= TIMEOUT_DURATION && currentOrder.getType().get() == Order.OrderType.SELL) {
-					sellOrders.remove(currentOrder);
-					throw new OrderTimeoutException();
-				}
+		if (currentOrder.orderType() == OrderType.BUY) {
+			buyRequests.incrementAndGet();
+			buyLocker.lock();
+			while (!buyOrdersProcessed.containsKey(currentOrder)) {
+				buyCondition.await();
 			}
-
-			Thread.sleep(SLEEPING_TIME);
+			buyLocker.unlock();
+		} else {
+			sellRequests.incrementAndGet();
+			sellLocker.lock();
+			while (!sellOrdersProcessed.containsKey(currentOrder)) {
+				sellCondition.await();
+			}
+			sellLocker.unlock();
 		}
+
+		if (currentOrder.orderType() == OrderType.BUY) {
+			buyOrdersProcessed.remove(currentOrder);
+			buyCompleted.incrementAndGet();
+		} else {
+			sellOrdersProcessed.remove(currentOrder);
+			sellCompleted.incrementAndGet();
+		}
+	}
+
+	public OrderStats getStatistics() {
+		return new OrderStats(buyRequests.get(), sellRequests.get(), buyProcessed.get(), sellProcessed.get(),
+				buyCompleted.get(), sellCompleted.get());
 	}
 }
