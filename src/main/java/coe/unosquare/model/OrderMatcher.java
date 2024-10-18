@@ -1,20 +1,21 @@
 package coe.unosquare.model;
 
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
-import reactor.core.scheduler.Schedulers;
-
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class OrderMatcher {
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
+public class OrderMatcher {
 	private static final int SLEEPING_TIME = 100;
+	private static final long TIMEOUT = 10;
 
 	private static final Comparator<Order> buyComparator = Comparator.comparing((Order order) -> -1 * order.price())
 			.thenComparing(Order::timestamp);
@@ -34,8 +35,8 @@ public class OrderMatcher {
 	private final AtomicInteger buyCompleted = new AtomicInteger(0);
 	private final AtomicInteger sellCompleted = new AtomicInteger(0);
 
-	private final Sinks.Many<Order> buyOrderSink = Sinks.many().multicast().onBackpressureBuffer();
-	private final Sinks.Many<Order> sellOrderSink = Sinks.many().multicast().onBackpressureBuffer();
+	private final Sinks.Many<Order> buyOrderSink = Sinks.many().unicast().onBackpressureBuffer();
+	private final Sinks.Many<Order> sellOrderSink = Sinks.many().unicast().onBackpressureBuffer();
 
 	public OrderMatcher() {
 		// Procesa las órdenes periódicamente
@@ -87,14 +88,18 @@ public class OrderMatcher {
 				if (Objects.nonNull(order)) {
 					buyCompleted.incrementAndGet();
 				}
-			}).repeatWhenEmpty(repeatSignal -> repeatSignal.delayElements(Duration.ofMillis(SLEEPING_TIME)));
+			}).repeatWhenEmpty(repeatSignal -> repeatSignal.delayElements(Duration.ofMillis(SLEEPING_TIME)))
+					.timeout(Duration.ofSeconds(TIMEOUT))
+					.doOnError(TimeoutException.class, ex -> buyOrders.remove(currentOrder));
 		} else {
 			sellRequests.incrementAndGet();
 			return Mono.defer(() -> Mono.justOrEmpty(sellOrdersProcessed.remove(currentOrder))).doOnSuccess(order -> {
 				if (Objects.nonNull(order)) {
 					sellCompleted.incrementAndGet();
 				}
-			}).repeatWhenEmpty(repeatSignal -> repeatSignal.delayElements(Duration.ofMillis(SLEEPING_TIME)));
+			}).repeatWhenEmpty(repeatSignal -> repeatSignal.delayElements(Duration.ofMillis(SLEEPING_TIME)))
+					.timeout(Duration.ofSeconds(TIMEOUT))
+					.doOnError(TimeoutException.class, ex -> sellOrders.remove(currentOrder));
 		}
 	}
 

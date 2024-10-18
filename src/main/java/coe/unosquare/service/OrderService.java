@@ -1,5 +1,7 @@
 package coe.unosquare.service;
 
+import java.util.concurrent.TimeoutException;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
@@ -7,7 +9,6 @@ import coe.unosquare.model.ApiResponse;
 import coe.unosquare.model.Order;
 import coe.unosquare.model.OrderMatcher;
 import coe.unosquare.model.OrderStats;
-import coe.unosquare.model.OrderTimeoutException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -25,10 +26,9 @@ public class OrderService {
 		// continua hasta que se procese
 		return orderMatcher.addOrder(order).then(orderMatcher.matchOrder(order)) // Procesa la orden de manera reactiva
 				.map(processedOrder -> ResponseEntity.ok().body(new ApiResponse(true, "Order processed", order)))
-				.switchIfEmpty(Mono.error(new OrderTimeoutException()))
-				.onErrorResume(OrderTimeoutException.class,
-						ex -> Mono
-								.just(ResponseEntity.status(500).body(new ApiResponse(false, ex.getMessage(), order))))
+				.onErrorResume(TimeoutException.class,
+						ex -> Mono.just(ResponseEntity.status(500).body(
+								new ApiResponse(false, "There is no matching order to complete your order", order))))
 				.subscribeOn(Schedulers.boundedElastic()); // Utilizando un scheduler para no bloquear el hilo
 	}
 
