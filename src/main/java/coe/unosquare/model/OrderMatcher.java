@@ -39,8 +39,8 @@ public class OrderMatcher implements InitializingBean {
 	private final AtomicInteger buyCompleted = new AtomicInteger(0);
 	private final AtomicInteger sellCompleted = new AtomicInteger(0);
 
-	private final Sinks.Many<Void> buyOrderSink = Sinks.many().unicast().onBackpressureBuffer();
-	private final Sinks.Many<Void> sellOrderSink = Sinks.many().unicast().onBackpressureBuffer();
+	private final Sinks.Many<Order> buyOrderSink = Sinks.many().unicast().onBackpressureBuffer();
+	private final Sinks.Many<Order> sellOrderSink = Sinks.many().unicast().onBackpressureBuffer();
 
 	@Override
 	public void afterPropertiesSet() {
@@ -54,12 +54,12 @@ public class OrderMatcher implements InitializingBean {
 		if (order.orderType() == OrderType.BUY) {
 			return Mono.fromRunnable(() -> {
 				buyOrders.add(order);
-				buyOrderSink.tryEmitNext(null); // Emitir la nueva orden de compra
+				buyOrderSink.tryEmitNext(order); // Emitir la nueva orden de compra
 			});
 		} else {
 			return Mono.fromRunnable(() -> {
 				sellOrders.add(order);
-				sellOrderSink.tryEmitNext(null); // Emitir la nueva orden de venta
+				sellOrderSink.tryEmitNext(order); // Emitir la nueva orden de venta
 			});
 		}
 	}
