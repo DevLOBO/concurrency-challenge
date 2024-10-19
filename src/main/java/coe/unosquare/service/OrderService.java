@@ -2,6 +2,7 @@ package coe.unosquare.service;
 
 import java.util.concurrent.TimeoutException;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
@@ -14,7 +15,8 @@ import reactor.core.scheduler.Schedulers;
 
 @Service
 public class OrderService {
-	private final OrderMatcher orderMatcher = new OrderMatcher();
+	@Autowired
+	private OrderMatcher orderMatcher;
 
 	public Mono<ApiResponse> viewOrders() {
 		// Obteniendo las órdenes en un Mono sin bloquear

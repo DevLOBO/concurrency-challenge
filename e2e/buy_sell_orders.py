@@ -22,10 +22,11 @@ with ThreadPoolExecutor(max_workers=100) as executor:
 	futures = []
 	input('Presiona cualquier tecla para continuar...')
 	start_time = time()
-	for _ in range(100000):
+	for _ in range(1):
 		futures.append(executor.submit(send_request, 0, 'BUY', 10))
-		futures.append(executor.submit(send_request, 0, 'SELL', 5))
+		futures.append(executor.submit(send_request, 0, 'SELL', 15))
+		futures.append(executor.submit(send_request, 2, 'SELL', 5))
 	results = [future.result() for future in as_completed(futures)]
 	duration = time() - start_time
-	print(f"Took {duration}")
+	print(f"Took {duration:.2f}s")
 	dump(results, open('results.json', 'w'))

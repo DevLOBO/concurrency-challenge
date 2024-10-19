@@ -8,12 +8,16 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.stereotype.Component;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
-public class OrderMatcher {
+@Component
+public class OrderMatcher implements InitializingBean {
 	private static final int SLEEPING_TIME = 100;
 	private static final long TIMEOUT = 10;
 
@@ -35,10 +39,11 @@ public class OrderMatcher {
 	private final AtomicInteger buyCompleted = new AtomicInteger(0);
 	private final AtomicInteger sellCompleted = new AtomicInteger(0);
 
-	private final Sinks.Many<Order> buyOrderSink = Sinks.many().unicast().onBackpressureBuffer();
-	private final Sinks.Many<Order> sellOrderSink = Sinks.many().unicast().onBackpressureBuffer();
+	private final Sinks.Many<Void> buyOrderSink = Sinks.many().unicast().onBackpressureBuffer();
+	private final Sinks.Many<Void> sellOrderSink = Sinks.many().unicast().onBackpressureBuffer();
 
-	public OrderMatcher() {
+	@Override
+	public void afterPropertiesSet() {
 		// Procesa las órdenes periódicamente
 		Flux.merge(buyOrderSink.asFlux(), sellOrderSink.asFlux()).flatMap(tick -> processOrders())
 				.subscribeOn(Schedulers.boundedElastic()).subscribe();
@@ -49,12 +54,12 @@ public class OrderMatcher {
 		if (order.orderType() == OrderType.BUY) {
 			return Mono.fromRunnable(() -> {
 				buyOrders.add(order);
-				buyOrderSink.tryEmitNext(order); // Emitir la nueva orden de compra
+				buyOrderSink.tryEmitNext(null); // Emitir la nueva orden de compra
 			});
 		} else {
 			return Mono.fromRunnable(() -> {
 				sellOrders.add(order);
-				sellOrderSink.tryEmitNext(order); // Emitir la nueva orden de venta
+				sellOrderSink.tryEmitNext(null); // Emitir la nueva orden de venta
 			});
 		}
 	}
@@ -73,8 +78,8 @@ public class OrderMatcher {
 					buyProcessed.incrementAndGet();
 					sellProcessed.incrementAndGet();
 				} else {
-					addOrder(so);
-					addOrder(bo);
+					buyOrders.add(bo);
+					sellOrders.add(so);
 				}
 			}
 		});
